@@ -19,4 +19,6 @@
 
 ## 索引
 
-暂无。二级目录只在实际内容形成清晰聚类后创建。
+- [指令记法](input-notation.md)：数字键盘方向、拳脚缩写与连段符号。
+- [格斗术语表](glossary.md)：常见格斗游戏与《Street Fighter 6》术语。
+- [机制与角色杂项](system-mechanics.md)：按 PDF 原表整理的通用机制和其他角色杂项。
