@@ -29,6 +29,30 @@ async function runCli(args, responses, extraEnv = {}) {
   return { exitCode, stdout, stderr };
 }
 
+function cargoFrameRow(overrides = {}) {
+  return {
+    sourcePage: "Street Fighter 6/Ryu/Data",
+    sourcePageId: "65938",
+    moveId: "ryu_236hp",
+    moveType: "Special",
+    chara: "Ryu",
+    input: "236HP",
+    name: "Hadoken",
+    damage: "600",
+    startup: "12",
+    active: "-",
+    recovery: "30",
+    total: "41",
+    guard: "All",
+    cancel: "SA3",
+    hitconfirm: "20",
+    hitAdv: "-1",
+    blockAdv: "-5",
+    punishAdv: "0",
+    ...overrides,
+  };
+}
+
 test("search 只返回 SF6 页面并保留摘要与来源", async () => {
   const response = {
     query: {
@@ -205,6 +229,376 @@ test("fetch 批量读取根页和多级子页的正文与修订来源", async ()
       },
     ],
   });
+});
+
+test("frame-data 返回预定义帧数字段与源页版本", async () => {
+  const result = await runCli(
+    ["frame-data", "Ryu"],
+    [
+      {
+        expected: {
+          origin: "https://wiki.supercombo.gg",
+          pathname: "/api.php",
+          method: "GET",
+          params: {
+            action: "cargoquery",
+            tables: "SF6_FrameData",
+            fields:
+              "SF6_FrameData._pageName=sourcePage,SF6_FrameData._pageID=sourcePageId,moveId,moveType,chara,input,name,damage,startup,active,recovery,total,guard,cancel,hitconfirm,hitAdv,blockAdv,punishAdv",
+            where: 'chara="Ryu"',
+            limit: "200",
+          },
+        },
+        body: {
+          cargoquery: [
+            {
+              title: cargoFrameRow(),
+            },
+          ],
+        },
+      },
+      {
+        expected: {
+          method: "GET",
+          params: {
+            action: "query",
+            titles: "Street Fighter 6/Ryu/Data",
+            prop: "info|revisions",
+            rvprop: "ids|timestamp",
+          },
+        },
+        body: {
+          query: {
+            pages: [
+              {
+                pageid: 65938,
+                ns: 0,
+                title: "Street Fighter 6/Ryu/Data",
+                revisions: [
+                  {
+                    revid: 365753,
+                    timestamp: "2026-06-06T23:55:38Z",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    ],
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout)).toEqual({
+    ok: true,
+    command: "frame-data",
+    character: "Ryu",
+    filters: { moveType: null, input: null },
+    limit: 200,
+    fields: [
+      "sourcePage",
+      "sourcePageId",
+      "moveId",
+      "moveType",
+      "character",
+      "input",
+      "name",
+      "damage",
+      "startup",
+      "active",
+      "recovery",
+      "total",
+      "guard",
+      "cancel",
+      "hitconfirm",
+      "hitAdv",
+      "blockAdv",
+      "punishAdv",
+    ],
+    sources: [
+      {
+        title: "Street Fighter 6/Ryu/Data",
+        pageid: 65938,
+        revid: 365753,
+        updatedAt: "2026-06-06T23:55:38Z",
+        url: "https://wiki.supercombo.gg/w/Street_Fighter_6/Ryu/Data",
+      },
+    ],
+    rows: [
+      {
+        sourcePage: "Street Fighter 6/Ryu/Data",
+        sourcePageId: 65938,
+        moveId: "ryu_236hp",
+        moveType: "Special",
+        character: "Ryu",
+        input: "236HP",
+        name: "Hadoken",
+        damage: "600",
+        startup: "12",
+        active: "-",
+        recovery: "30",
+        total: "41",
+        guard: "All",
+        cancel: "SA3",
+        hitconfirm: "20",
+        hitAdv: "-1",
+        blockAdv: "-5",
+        punishAdv: "0",
+      },
+    ],
+  });
+});
+
+test("frame-data 拒绝与 Cargo 源页不一致的页面版本", async () => {
+  const result = await runCli(
+    ["frame-data", "Ryu", "--limit", "1"],
+    [
+      {
+        body: {
+          cargoquery: [{ title: cargoFrameRow() }],
+        },
+      },
+      {
+        body: {
+          query: {
+            pages: [
+              {
+                pageid: 1,
+                ns: 0,
+                title: "Street Fighter 6/Ryu/Data",
+                revisions: [
+                  {
+                    revid: 365753,
+                    timestamp: "2026-06-06T23:55:38Z",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    ],
+  );
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(JSON.parse(result.stderr)).toMatchObject({
+    ok: false,
+    error: {
+      type: "cargo_unavailable",
+      message:
+        "SuperCombo 结构化帧数查询不可用：SuperCombo 帧数来源与页面版本不一致",
+      fallback: {
+        command: "search",
+        query: "Ryu Data",
+        then: "fetch",
+      },
+    },
+  });
+});
+
+test("frame-data 只用固定条件应用招式类型、指令和行数筛选", async () => {
+  const result = await runCli(
+    [
+      "frame-data",
+      'A.K.I."',
+      "--move-type",
+      "ground_normal",
+      "--input",
+      '5"HP',
+      "--limit",
+      "1",
+    ],
+    [
+      {
+        expected: {
+          params: {
+            action: "cargoquery",
+            tables: "SF6_FrameData",
+            where:
+              'chara="A.K.I.\\"" AND moveType="ground_normal" AND input="5\\"HP"',
+            limit: "1",
+          },
+        },
+        body: { cargoquery: [] },
+      },
+    ],
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    ok: true,
+    command: "frame-data",
+    character: 'A.K.I."',
+    filters: { moveType: "ground_normal", input: '5"HP' },
+    limit: 1,
+    sources: [],
+    rows: [],
+  });
+});
+
+test("frame-data 在 Cargo 结构异常时返回可执行的降级信号", async () => {
+  const result = await runCli(["frame-data", "Ryu"], [
+    {
+      body: {
+        cargoquery: [
+          {
+            title: {
+              sourcePage: "Street Fighter 6/Ryu/Data",
+              sourcePageId: "65938",
+              moveId: "ryu_236hp",
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stdout).toBe("");
+  const output = JSON.parse(result.stderr);
+  expect(output).toEqual({
+    ok: false,
+    error: {
+      type: "cargo_unavailable",
+      message:
+        "SuperCombo 结构化帧数查询不可用：SuperCombo 帧数响应结构无效",
+      fallback: {
+        command: "search",
+        query: "Ryu Data",
+        select: {
+          titlePrefix: "Street Fighter 6/",
+          titleSuffix: "/Data",
+          character: "Ryu",
+        },
+        then: "fetch",
+        notice: "结构化查询不可用；请读取对应 SF6 页面的 Wiki 原始 wikitext",
+      },
+    },
+  });
+
+  const fallback = output.error.fallback;
+  const searchResult = await runCli(
+    [fallback.command, fallback.query],
+    [
+      {
+        body: {
+          query: {
+            search: [
+              {
+                ns: 0,
+                title: "Street Fighter 6/Ryu/Data",
+                pageid: 65938,
+                snippet: "Ryu frame data",
+                timestamp: "2026-06-06T23:55:38Z",
+              },
+              {
+                ns: 0,
+                title: "Street Fighter 6/Ryu",
+                pageid: 56282,
+                snippet: "Ryu overview",
+                timestamp: "2026-06-05T12:00:00Z",
+              },
+            ],
+          },
+        },
+      },
+    ],
+  );
+  expect(searchResult.exitCode).toBe(0);
+
+  const candidate = JSON.parse(searchResult.stdout).results.find(
+    (page) =>
+      page.title.startsWith(fallback.select.titlePrefix) &&
+      page.title.endsWith(fallback.select.titleSuffix) &&
+      page.title.includes(`/${fallback.select.character}/`),
+  );
+  expect(candidate.title).toBe("Street Fighter 6/Ryu/Data");
+
+  const fetchResult = await runCli(
+    [fallback.then, candidate.title],
+    [
+      {
+        body: {
+          query: {
+            pages: [
+              {
+                pageid: 65938,
+                ns: 0,
+                title: "Street Fighter 6/Ryu/Data",
+                revisions: [
+                  {
+                    revid: 365753,
+                    timestamp: "2026-06-06T23:55:38Z",
+                    slots: { main: { content: "Ryu frame data wikitext" } },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    ],
+  );
+  expect(fetchResult.exitCode).toBe(0);
+  expect(JSON.parse(fetchResult.stdout).pages[0]).toMatchObject({
+    title: "Street Fighter 6/Ryu/Data",
+    revid: 365753,
+    updatedAt: "2026-06-06T23:55:38Z",
+    wikitext: "Ryu frame data wikitext",
+  });
+});
+
+test("frame-data 在 Cargo 请求失败时返回同一降级信号", async () => {
+  const result = await runCli(["frame-data", "Ryu"], [
+    {
+      body: {
+        error: {
+          code: "internal_api_error",
+          info: "Cargo query failed",
+        },
+      },
+    },
+  ]);
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(JSON.parse(result.stderr)).toMatchObject({
+    ok: false,
+    error: {
+      type: "cargo_unavailable",
+      fallback: {
+        command: "search",
+        query: "Ryu Data",
+        then: "fetch",
+      },
+    },
+  });
+});
+
+test("frame-data 在请求前拒绝越界行数和通用查询参数", async () => {
+  for (const [args, message] of [
+    [
+      ["frame-data", "Ryu", "--limit", "201"],
+      "--limit 必须是 1 到 200 之间的整数",
+    ],
+    [
+      ["frame-data", "Ryu", "--where", "1=1"],
+      "未知参数：--where",
+    ],
+    [["frame-data"], "frame-data 需要角色名"],
+  ]) {
+    const result = await runCli(args, []);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toEqual({
+      ok: false,
+      error: { type: "argument_error", message },
+    });
+  }
 });
 
 test("fetch 在网络请求前拒绝范围外标题", async () => {

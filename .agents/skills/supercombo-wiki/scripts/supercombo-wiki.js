@@ -3,14 +3,44 @@ const PAGE_ROOT = "Street Fighter 6";
 const MAX_ATTEMPTS = 3;
 const REQUEST_TIMEOUT_MS = 20_000;
 const RETRY_BASE_DELAY_MS = 250;
+const FRAME_DATA_LIMIT = 200;
+const FRAME_DATA_SCHEMA = [
+  {
+    output: "sourcePage",
+    cargo: "sourcePage",
+    query: "SF6_FrameData._pageName=sourcePage",
+  },
+  {
+    output: "sourcePageId",
+    cargo: "sourcePageId",
+    query: "SF6_FrameData._pageID=sourcePageId",
+  },
+  { output: "moveId", cargo: "moveId", query: "moveId" },
+  { output: "moveType", cargo: "moveType", query: "moveType" },
+  { output: "character", cargo: "chara", query: "chara" },
+  { output: "input", cargo: "input", query: "input" },
+  { output: "name", cargo: "name", query: "name" },
+  { output: "damage", cargo: "damage", query: "damage" },
+  { output: "startup", cargo: "startup", query: "startup" },
+  { output: "active", cargo: "active", query: "active" },
+  { output: "recovery", cargo: "recovery", query: "recovery" },
+  { output: "total", cargo: "total", query: "total" },
+  { output: "guard", cargo: "guard", query: "guard" },
+  { output: "cancel", cargo: "cancel", query: "cancel" },
+  { output: "hitconfirm", cargo: "hitconfirm", query: "hitconfirm" },
+  { output: "hitAdv", cargo: "hitAdv", query: "hitAdv" },
+  { output: "blockAdv", cargo: "blockAdv", query: "blockAdv" },
+  { output: "punishAdv", cargo: "punishAdv", query: "punishAdv" },
+];
 const USER_AGENT =
   process.env.SUPERCOMBO_USER_AGENT ??
   "sf6-up-supercombo/0.1 (+https://github.com/jfmoe/sf6-up)";
 
 class CliError extends Error {
-  constructor(type, message) {
+  constructor(type, message, details = {}) {
     super(message);
     this.type = type;
+    Object.assign(this, details);
   }
 }
 
@@ -182,6 +212,160 @@ async function fetchPages(titles) {
   return { ok: true, command: "fetch", titles, pages };
 }
 
+async function fetchPageSources(titles) {
+  if (titles.length === 0) {
+    return [];
+  }
+
+  const url = new URL(API_URL);
+  url.search = new URLSearchParams({
+    action: "query",
+    format: "json",
+    formatversion: "2",
+    titles: titles.join("|"),
+    prop: "info|revisions",
+    inprop: "url",
+    rvprop: "ids|timestamp",
+    rvlimit: "1",
+    maxlag: "5",
+  });
+
+  const body = await requestJson(url);
+  if (!Array.isArray(body.query?.pages)) {
+    throw new CliError("response_error", "SuperCombo 来源响应结构无效");
+  }
+
+  return body.query.pages.map((page) => {
+    const revision = page.revisions?.[0];
+    if (
+      page.ns !== 0 ||
+      !isSf6Title(page.title) ||
+      !Number.isInteger(page.pageid) ||
+      !Number.isInteger(revision?.revid) ||
+      typeof revision.timestamp !== "string"
+    ) {
+      throw new CliError("response_error", "SuperCombo 来源响应结构无效");
+    }
+    return {
+      title: page.title,
+      pageid: page.pageid,
+      revid: revision.revid,
+      updatedAt: revision.timestamp,
+      url: pageUrl(page.title),
+    };
+  });
+}
+
+function cargoString(value) {
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+function cargoUnavailable(character, reason) {
+  return new CliError(
+    "cargo_unavailable",
+    `SuperCombo 结构化帧数查询不可用：${reason}`,
+    {
+      fallback: {
+        command: "search",
+        query: `${character} Data`,
+        select: {
+          titlePrefix: `${PAGE_ROOT}/`,
+          titleSuffix: "/Data",
+          character,
+        },
+        then: "fetch",
+        notice:
+          "结构化查询不可用；请读取对应 SF6 页面的 Wiki 原始 wikitext",
+      },
+    },
+  );
+}
+
+async function frameData({ character, moveType, input, limit }) {
+  const conditions = [`chara=${cargoString(character)}`];
+  if (moveType !== null) {
+    conditions.push(`moveType=${cargoString(moveType)}`);
+  }
+  if (input !== null) {
+    conditions.push(`input=${cargoString(input)}`);
+  }
+
+  const url = new URL(API_URL);
+  url.search = new URLSearchParams({
+    action: "cargoquery",
+    format: "json",
+    tables: "SF6_FrameData",
+    fields: FRAME_DATA_SCHEMA.map((field) => field.query).join(","),
+    where: conditions.join(" AND "),
+    limit: String(limit),
+  });
+
+  let rows;
+  try {
+    const body = await requestJson(url);
+    if (
+      !Array.isArray(body.cargoquery) ||
+      body.cargoquery.length > limit
+    ) {
+      throw new CliError("response_error", "SuperCombo 帧数响应结构无效");
+    }
+    rows = body.cargoquery.map((result) => {
+      const row = result?.title;
+      if (
+        !row ||
+        FRAME_DATA_SCHEMA.some(
+          (field) => typeof row[field.cargo] !== "string",
+        ) ||
+        !isSf6Title(row.sourcePage) ||
+        !/^\d+$/.test(row.sourcePageId) ||
+        row.chara !== character
+      ) {
+        throw new CliError("response_error", "SuperCombo 帧数响应结构无效");
+      }
+      const output = Object.fromEntries(
+        FRAME_DATA_SCHEMA.map((field) => [
+          field.output,
+          row[field.cargo],
+        ]),
+      );
+      output.sourcePageId = Number(output.sourcePageId);
+      return output;
+    });
+  } catch (error) {
+    const reason =
+      error instanceof CliError ? error.message : "SuperCombo 请求失败";
+    throw cargoUnavailable(character, reason);
+  }
+
+  const sourceTitles = [...new Set(rows.map((row) => row.sourcePage))];
+  const sources = await fetchPageSources(sourceTitles);
+  const sourceByTitle = new Map(
+    sources.map((source) => [source.title, source]),
+  );
+  if (
+    sources.length !== sourceTitles.length ||
+    rows.some(
+      (row) =>
+        sourceByTitle.get(row.sourcePage)?.pageid !== row.sourcePageId,
+    )
+  ) {
+    throw cargoUnavailable(
+      character,
+      "SuperCombo 帧数来源与页面版本不一致",
+    );
+  }
+  return {
+    ok: true,
+    command: "frame-data",
+    character,
+    filters: { moveType, input },
+    limit,
+    fields: FRAME_DATA_SCHEMA.map((field) => field.output),
+    sources,
+    rows,
+  };
+}
+
 function parseSearchArgs(args) {
   const queryParts = [];
   let limit = 10;
@@ -239,6 +423,58 @@ function parseFetchArgs(args) {
   });
 }
 
+function parseFrameDataArgs(args) {
+  let character = null;
+  let moveType = null;
+  let input = null;
+  let limit = FRAME_DATA_LIMIT;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (
+      argument === "--move-type" ||
+      argument === "--input" ||
+      argument === "--limit"
+    ) {
+      const value = args[index + 1];
+      if (!value?.trim()) {
+        throw new CliError("argument_error", `${argument} 需要一个值`);
+      }
+      if (argument === "--move-type") {
+        moveType = value.trim();
+      } else if (argument === "--input") {
+        input = value.trim();
+      } else {
+        if (!/^\d+$/.test(value)) {
+          throw new CliError(
+            "argument_error",
+            "--limit 必须是 1 到 200 之间的整数",
+          );
+        }
+        limit = Number(value);
+      }
+      index += 1;
+    } else if (argument.startsWith("--")) {
+      throw new CliError("argument_error", `未知参数：${argument}`);
+    } else if (character === null) {
+      character = argument.trim();
+    } else {
+      throw new CliError("argument_error", "frame-data 只接受一个角色名");
+    }
+  }
+
+  if (!character) {
+    throw new CliError("argument_error", "frame-data 需要角色名");
+  }
+  if (limit < 1 || limit > FRAME_DATA_LIMIT) {
+    throw new CliError(
+      "argument_error",
+      "--limit 必须是 1 到 200 之间的整数",
+    );
+  }
+  return { character, moveType, input, limit };
+}
+
 async function main() {
   const [command, ...args] = process.argv.slice(2);
 
@@ -249,7 +485,13 @@ async function main() {
   if (command === "fetch") {
     return fetchPages(parseFetchArgs(args));
   }
-  throw new CliError("argument_error", "命令必须是 search 或 fetch");
+  if (command === "frame-data") {
+    return frameData(parseFrameDataArgs(args));
+  }
+  throw new CliError(
+    "argument_error",
+    "命令必须是 search、fetch 或 frame-data",
+  );
 }
 
 try {
@@ -259,8 +501,12 @@ try {
   const type = error instanceof CliError ? error.type : "network_error";
   const message =
     error instanceof CliError ? error.message : "SuperCombo 请求失败";
+  const fallback =
+    error instanceof CliError && error.fallback
+      ? { fallback: error.fallback }
+      : {};
   process.stderr.write(
-    `${JSON.stringify({ ok: false, error: { type, message } })}\n`,
+    `${JSON.stringify({ ok: false, error: { type, message, ...fallback } })}\n`,
   );
   process.exitCode = 1;
 }

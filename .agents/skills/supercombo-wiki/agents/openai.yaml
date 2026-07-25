@@ -1,4 +1,4 @@
 interface:
   display_name: "SuperCombo Wiki"
-  short_description: "按需检索并读取可追溯的 SuperCombo SF6 Wiki 资料"
-  default_prompt: "使用 $supercombo-wiki 核查这个 SF6 问题，并附页面版本与来源。"
+  short_description: "检索并查询可追溯的 SuperCombo SF6 Wiki 与帧数资料"
+  default_prompt: "使用 $supercombo-wiki 核查这个 SF6 问题，并区分来源事实与推断。"

@@ -50,3 +50,26 @@ smokeTest("真实 SuperCombo fetch 返回正文与修订来源", async () => {
   expect(typeof output.pages[0].url).toBe("string");
   expect(typeof output.pages[0].wikitext).toBe("string");
 });
+
+smokeTest("真实 SuperCombo frame-data 返回帧数与源页版本", async () => {
+  const output = await runCli(["frame-data", "Ryu", "--limit", "1"]);
+
+  expect(output.ok).toBe(true);
+  expect(output.command).toBe("frame-data");
+  expect(output.character).toBe("Ryu");
+  expect(Array.isArray(output.fields)).toBe(true);
+  expect(Array.isArray(output.rows)).toBe(true);
+  expect(output.rows.length).toBeGreaterThan(0);
+  expect(output.rows.length).toBeLessThanOrEqual(1);
+  expect(Array.isArray(output.sources)).toBe(true);
+  expect(output.sources.length).toBeGreaterThan(0);
+  for (const field of output.fields) {
+    expect(field in output.rows[0]).toBe(true);
+  }
+  for (const source of output.sources) {
+    expect(typeof source.pageid).toBe("number");
+    expect(typeof source.revid).toBe("number");
+    expect(typeof source.updatedAt).toBe("string");
+    expect(typeof source.url).toBe("string");
+  }
+});
