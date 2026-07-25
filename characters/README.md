@@ -23,4 +23,4 @@
 
 ## 索引
 
-- [不知火舞](mai-shiranui/README.md)：常用拳脚、入门连段与压起身。
+- [不知火舞](mai-shiranui/README.md)：入门拳脚与连段，以及进阶备忘录。
